@@ -39,81 +39,48 @@
 package org.dcm4chee.proxy.utils;
 
 import java.io.File;
-import java.io.FileFilter;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.util.Properties;
 
+import org.dcm4che3.net.ApplicationEntity;
 import org.dcm4chee.proxy.conf.ProxyAEExtension;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.junit.Before;
+import org.junit.Test;
+import org.powermock.reflect.Whitebox;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 
 /**
- * The .info file helper functions.
- *
- * @author Michael Backhaus &lt;michael.backhaus@agfa.com&gt;
  * @author Pavel Bludov
  */
-public class InfoFileUtils
+public class InfoFileUtilsTest
 {
-    private static final Logger LOG = LoggerFactory.getLogger(InfoFileUtils.class);
+    final ProxyAEExtension extension = new ProxyAEExtension();
 
-    public static Properties getFileInfoProperties(
-        ProxyAEExtension proxyAEE,
-        File file)
+    @Before
+    public void setUp()
+    {
+        Whitebox.setInternalState(extension, "ae", new ApplicationEntity("AE"));
+    }
+
+    @Test
+    public void testGetFileInfoProperties()
     throws IOException
     {
-        final String baseFileName = getBaseFileName(file);
-        File infoFile = null;
-        for (File f: file.getParentFile().listFiles(infoFileFilter()))
-        {
-            if (baseFileName.equals(getBaseFileName(f)))
-            {
-                infoFile = f;
-                break;
-            }
-        }
-        if (infoFile == null)
-        {
-            throw new FileNotFoundException("Unable to find information file for " + file);
-        }
-        return loadPropertiesFromFile(proxyAEE, infoFile);
+        Properties props = InfoFileUtils.getFileInfoProperties(extension,
+            new File("src/test/resources/testMPPS.dcm"));
+
+        assertNotNull(props);
+        assertEquals("0.0.0.0", props.getProperty("hostname"));
     }
 
-    private static String getBaseFileName(
-        File file)
-    {
-        final String name = file.getName();
-        final int dotIndex = name.indexOf('.');
-        return dotIndex > 0 ? name.substring(0, dotIndex) : name;
-    }
-
-    public static Properties loadPropertiesFromFile(
-        ProxyAEExtension proxyAEE,
-        File infoFile)
+    @Test (expected = FileNotFoundException.class)
+    public void testGetFileInfoPropertiesNotExistentFile()
     throws IOException
     {
-        LOG.debug("{}: Loading info file {}", proxyAEE.getApplicationEntity().getAETitle(), infoFile);
-        Properties prop = new Properties();
-        try (InputStream inStream = Files.newInputStream(infoFile.toPath()))
-        {
-            prop.load(inStream);
-        }
-        return prop;
-    }
-
-    public static FileFilter infoFileFilter()
-    {
-        return new FileFilter()
-        {
-            @Override
-            public boolean accept(
-                File pathname)
-            {
-                return pathname.getName().endsWith(".info");
-            }
-        };
+        InfoFileUtils.getFileInfoProperties(extension,
+            new File("src/test/resources/xr-dosesr-iod.xml"));
     }
 }
