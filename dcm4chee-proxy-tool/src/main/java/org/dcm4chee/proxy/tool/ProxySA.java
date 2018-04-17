@@ -38,8 +38,13 @@
 
 package org.dcm4chee.proxy.tool;
 
+import java.io.BufferedInputStream;
+import java.io.FileInputStream;
+import java.io.IOException;
 import java.sql.DriverManager;
 import java.util.ResourceBundle;
+import java.util.prefs.InvalidPreferencesFormatException;
+import java.util.prefs.Preferences;
 
 import javax.naming.NamingException;
 
@@ -104,6 +109,16 @@ public class ProxySA {
             env.setUserDN(cl.getOptionValue("ldap-userDN"));
             env.setPassword(cl.getOptionValue("ldap-pwd"));
             return newLdapProxyConfiguration(hl7Config);
+        } else if (cl.hasOption("config")) {
+            try (BufferedInputStream is = new BufferedInputStream(new FileInputStream(cl.getOptionValue("config")))) {
+                new PreferencesDicomConfiguration().purgeConfiguration();
+                Preferences.importPreferences(is);
+            }
+            catch (InvalidPreferencesFormatException | IOException e)
+            {
+                e.printStackTrace();
+                System.exit(2);
+            }
         } else if (cl.hasOption("jdbc-backend-url")) {
             if (!DriverManager.getDrivers().hasMoreElements())
                 throw new RuntimeException("No jdbc driver in classpath.");
@@ -165,6 +180,8 @@ public class ProxySA {
     private static void addDicomConfig(Options opts) {
         opts.addOption(OptionBuilder.hasArg().withArgName("name").withDescription(rb.getString("device"))
                 .withLongOpt("device").create(null));
+        opts.addOption(OptionBuilder.hasArg().withArgName("file").withDescription(rb.getString("config"))
+                .withLongOpt("config").create(null));
     }
 
     @SuppressWarnings("static-access")
