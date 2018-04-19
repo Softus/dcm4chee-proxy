@@ -40,18 +40,14 @@ package org.dcm4chee.proxy.dimse;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.GregorianCalendar;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Properties;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.io.FileUtils;
@@ -62,7 +58,6 @@ import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
 import org.dcm4che3.data.VR;
 import org.dcm4che3.emf.MultiframeExtractor;
-import org.dcm4che3.io.BulkDataDescriptor;
 import org.dcm4che3.io.DicomEncodingOptions;
 import org.dcm4che3.io.DicomInputStream;
 import org.dcm4che3.io.DicomInputStream.IncludeBulkData;
@@ -82,7 +77,6 @@ import org.dcm4che3.net.pdu.PresentationContext;
 import org.dcm4che3.net.service.BasicCStoreSCP;
 import org.dcm4che3.net.service.DicomServiceException;
 import org.dcm4che3.util.SafeClose;
-import org.dcm4che3.util.StreamUtils;
 import org.dcm4chee.proxy.common.AuditDirectory;
 import org.dcm4chee.proxy.common.CMoveInfoObject;
 import org.dcm4chee.proxy.common.RetryObject;
@@ -149,7 +143,8 @@ public class CStore extends BasicCStoreSCP {
                 || proxyAEE.getAttributeCoercions().findAttributeCoercion(
                         rq.getString(Tag.AffectedSOPClassUID), dimse, Role.SCU,
                         asAccepted.getRemoteAET()) != null
-                || proxyAEE.getAttributeCoercions().findAttributeCoercion(
+                || (forwardAssociationProperty instanceof Association)
+                    && proxyAEE.getAttributeCoercions().findAttributeCoercion(
                         rq.getString(Tag.AffectedSOPClassUID),
                         dimse,
                         Role.SCP,
@@ -198,53 +193,47 @@ public class CStore extends BasicCStoreSCP {
     }
 
     private static void deleteFile(final Association as, final File file) {
-        if(!file.delete()){
-        // this scheduled delete is done to fix an issue with windows delete
-        final int maxCycles = 100;
-                as.getDevice().getScheduledExecutor().schedule(new Runnable() {
+        final File info = InfoFileUtils.findInfoFile(file);
+        if (!file.delete()) {
+            // this scheduled delete is done to fix an issue with windows delete
+            final int maxCycles = 100;
+            as.getDevice().getScheduledExecutor().schedule(new Runnable() {
 
-                    @Override
-                    public void run() {
-                        File info = new File(file.getParent(), file.getName()
-                                .substring(0, file.getName().indexOf('.'))
-                                + ".info");
-                        boolean fileDeleted = false;
-                        boolean infoFileDeleted = false;
-                        int cycle=0;
-                        while ((file.exists() || info.exists() ) && cycle <= maxCycles) {
-                            cycle++;
-                            if (file.exists())
-                                fileDeleted = FileUtils.deleteQuietly(file);
-
-                            if(info.exists())
+                @Override
+                public void run() {
+                    boolean fileDeleted = false;
+                    boolean infoFileDeleted = false;
+                    for (int cycle=0; (file.exists() || info.exists()) && cycle <= maxCycles; ++cycle) {
+                        if (file.exists())
+                            fileDeleted = FileUtils.deleteQuietly(file);
+                        if (info.exists())
                             infoFileDeleted = FileUtils.deleteQuietly(info);
-                            synchronized(this){
+                        synchronized (this) {
                             try {
                                 wait(1000);
                             } catch (InterruptedException e) {
                                 e.printStackTrace();
                             }
-                            }
                         }
-                        if (fileDeleted)
-                            LOG.debug("{}: delete {}", as, file);
-                        else
-                            LOG.debug("{}: failed to delete {}", as, file);
-                        if (infoFileDeleted)
-                            LOG.debug("{}: delete {}", as, info);
-                        else
-                            LOG.debug("{}: failed to delete {}", as, info);
                     }
-                }, 500, TimeUnit.MILLISECONDS);
+                    if (fileDeleted)
+                        LOG.debug("{}: delete {}", as, file);
+                    else
+                        LOG.debug("{}: failed to delete {}", as, file);
+                    if (infoFileDeleted)
+                        LOG.debug("{}: delete {}", as, info);
+                    else
+                        LOG.debug("{}: failed to delete {}", as, info);
+                }
+            }, 500, TimeUnit.MILLISECONDS);
         }
         else
         {
                 LOG.debug("{}: delete {}", as, file);
-                File info = new File(file.getParent(),file.getName().substring(0, file.getName().indexOf('.')) + ".info");
                 if (info.delete())
-                LOG.debug("{}: delete {}", as, info);
+                    LOG.debug("{}: delete {}", as, info);
                 else
-                LOG.debug("{}: failed to delete {}", as, info);
+                    LOG.debug("{}: failed to delete {}", as, info);
         }
 
     }
@@ -301,8 +290,7 @@ public class CStore extends BasicCStoreSCP {
 
     private Attributes processInputStream(ProxyAEExtension proxyAEE,
             Association as, PresentationContext pc, Attributes rq,
-            PDVInputStream data, File file) throws FileNotFoundException,
-            IOException {
+            PDVInputStream data, File file) throws IOException {
         LOG.debug("{}: write {}", as, file);
         // stream to write spool file
         FileOutputStream fout = new FileOutputStream(file);
@@ -317,10 +305,8 @@ public class CStore extends BasicCStoreSCP {
         // fix
         // spool first
         try {
-            if (data instanceof PDVInputStream) {
-                ((PDVInputStream) data).copyTo(out);
-            } else if (data != null) {
-                StreamUtils.copy(data, out);
+            if (data != null) {
+                data.copyTo(out);
             }
         } finally {
             fout.flush();
@@ -374,50 +360,15 @@ public class CStore extends BasicCStoreSCP {
         prop.setProperty("transfer-syntax-uid",
                 fmi.getString(Tag.TransferSyntaxUID));
         prop.setProperty("source-aet", as.getCallingAET());
-        String path = file.getPath();
-        File info = new File(path.substring(0, path.length() - 5) + ".info");
-        FileOutputStream infoOut = new FileOutputStream(info);
-        try {
-            prop.store(infoOut, null);
-            infoOut.flush();
-            infoOut.getFD().sync();
-        } finally {
-            infoOut.close();
-        }
-        attrs = null;
-        return fmi;
-    }
+        InfoFileUtils.setFileInfoProperties(proxyAEE, file, prop);
 
-    private void addFileInfo(String path, String key, String value)
-            throws IOException {
-        File info = new File(path.substring(0, path.length() - 5) + ".info");
-        Properties prop = new Properties();
-        FileInputStream inStream = null;
-        try {
-            inStream = new FileInputStream(info);
-            prop.load(inStream);
-        } catch (Exception e) {
-            e.printStackTrace();
-        } finally {
-            inStream.close();
-        }
-        prop.setProperty(key, value);
-        FileOutputStream out = null;
-        try {
-            out = new FileOutputStream(info);
-            prop.store(out, null);
-        } catch (Exception e) {
-            e.printStackTrace();
-        } finally {
-            out.close();
-        }
+        return fmi;
     }
 
     private void processForwardRules(ProxyAEExtension proxyAEE,
             Association asAccepted, Object forwardAssociationProperty,
             PresentationContext pc, Dimse dimse, Attributes rq, Attributes rsp,
-            File file, Attributes fmi) throws IOException,
-            DicomServiceException, ConfigurationException {
+            File file, Attributes fmi) throws IOException, ConfigurationException {
         List<ForwardRule> forwardRules = ForwardRuleUtils
                 .filterForwardRulesOnDimseRQ(
                         proxyAEE.getCurrentForwardRules(asAccepted),
@@ -434,17 +385,13 @@ public class CStore extends BasicCStoreSCP {
         else {
             List<String> prevDestinationAETs = new ArrayList<String>();
             for (ForwardRule rule : forwardRules) {
-                List<String> destinationAETs = new ArrayList<String>();
+                Attributes data = null;
                 if (rule.containsTemplateURI()) {
-                    Attributes data = proxyAEE.parseAttributesWithLazyBulkData(
+                    data = proxyAEE.parseAttributesWithLazyBulkData(
                             asAccepted, file);
-                    destinationAETs = ForwardRuleUtils
-                            .getDestinationAETsFromForwardRule(asAccepted,
-                                    rule, data);
-                } else
-                    destinationAETs = ForwardRuleUtils
-                            .getDestinationAETsFromForwardRule(asAccepted,
-                                    rule, null);
+                }
+                List<String> destinationAETs = ForwardRuleUtils
+                    .getDestinationAETsFromForwardRule(asAccepted, rule, data);
                 for (String calledAET : destinationAETs) {
                     if (prevDestinationAETs.contains(calledAET)) {
                         LOG.info(
@@ -454,11 +401,11 @@ public class CStore extends BasicCStoreSCP {
                         LOG.info("{}: Please check configured forward rules for overlapping time with duplicate destination AETs");
                         continue;
                     }
-                    if (rule.getUseCallingAET() != null)
-                        addFileInfo(file.getPath(), "use-calling-aet",
-                                rule.getUseCallingAET());
-                    createMappedFileCopy(proxyAEE, asAccepted, file, calledAET,
-                            ".dcm");
+                    if (rule.getUseCallingAET() != null) {
+                        InfoFileUtils.addFileInfoProperty(proxyAEE, file, "use-calling-aet",
+                            rule.getUseCallingAET());
+                    }
+                    createMappedFileCopy(proxyAEE, asAccepted, file, calledAET, ".dcm");
                 }
                 prevDestinationAETs.addAll(destinationAETs);
             }
@@ -472,21 +419,19 @@ public class CStore extends BasicCStoreSCP {
             Object forwardAssociationProperty, PresentationContext pc,
             Attributes rq, File file, Attributes fmi,
             ProxyAEExtension proxyAEE, ForwardRule rule)
-            throws DicomServiceException, IOException {
+            throws IOException {
         if (rule.getUseCallingAET() != null)
-            addFileInfo(file.getPath(), "use-calling-aet",
-                    rule.getUseCallingAET());
+            InfoFileUtils.addFileInfoProperty(proxyAEE, file, "use-calling-aet",
+                rule.getUseCallingAET());
         String calledAET = rule.getDestinationAETitles().get(0);
-        ForwardOption forwardOption = proxyAEE.getForwardOptions().get(
-                calledAET);
+        ForwardOption forwardOption = proxyAEE.getForwardOptions().get(calledAET);
         if (forwardOption == null
                 || forwardOption.getSchedule().isNow(new GregorianCalendar())) {
             String callingAET = (rule.getUseCallingAET() == null) ? asAccepted
                     .getCallingAET() : rule.getUseCallingAET();
             Association asInvoked = getSingleForwardDestination(asAccepted,
                     callingAET, calledAET,
-                    ForwardConnectionUtils
-                            .copyOfMatchingAAssociateRQ(asAccepted),
+                    ForwardConnectionUtils.copyOfMatchingAAssociateRQ(asAccepted),
                     forwardAssociationProperty, proxyAEE, rule);
             if (asInvoked != null) {
                 asAccepted.setProperty(ProxyAEExtension.FORWARD_ASSOCIATION,
@@ -511,8 +456,7 @@ public class CStore extends BasicCStoreSCP {
 
     private void storeToCalledAETSpoolDir(ProxyAEExtension proxyAEE,
             Association asAccepted, PresentationContext pc, Attributes rq,
-            File file, String calledAET) throws IOException,
-            DicomServiceException {
+            File file, String calledAET) throws IOException {
         File dir = new File(proxyAEE.getCStoreDirectoryPath(), calledAET);
         dir.mkdir();
         String fileName = file.getName();
@@ -653,12 +597,10 @@ public class CStore extends BasicCStoreSCP {
             PresentationContext pc, Attributes rq, File dataFile)
             throws IOException {
         Attributes src;
-        DicomInputStream dis = new DicomInputStream(dataFile);
-        try {
+        try (DicomInputStream dis = new DicomInputStream(dataFile))
+        {
             dis.setIncludeBulkData(IncludeBulkData.URI);
             src = dis.readDataset(-1, -1);
-        } finally {
-            dis.close();
         }
         MultiframeExtractor extractor = new MultiframeExtractor();
         int n = src.getInt(Tag.NumberOfFrames, 1);

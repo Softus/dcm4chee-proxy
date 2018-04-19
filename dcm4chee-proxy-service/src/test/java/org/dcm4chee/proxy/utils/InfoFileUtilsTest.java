@@ -41,6 +41,10 @@ package org.dcm4chee.proxy.utils;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Modifier;
+import java.nio.file.Files;
 import java.util.Properties;
 
 import org.dcm4che3.net.ApplicationEntity;
@@ -51,13 +55,23 @@ import org.powermock.reflect.Whitebox;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 /**
+ * Test methods for {@link InfoFileUtils}.
  * @author Pavel Bludov
  */
 public class InfoFileUtilsTest
 {
     final ProxyAEExtension extension = new ProxyAEExtension();
+    final File testResourcesDir = new File("src/test/resources/"
+        + InfoFileUtils.class.getName().replace('.', '/'));
+
+    private File testFile(
+        String fileName)
+    {
+        return new File(testResourcesDir, fileName);
+    }
 
     @Before
     public void setUp()
@@ -66,21 +80,88 @@ public class InfoFileUtilsTest
     }
 
     @Test
+    public void testPrivateConstructor()
+    throws IOException, ReflectiveOperationException
+    {
+        final Constructor<InfoFileUtils> constructor
+            = InfoFileUtils.class.getDeclaredConstructor();
+        assertTrue(Modifier.isPrivate(constructor.getModifiers()));
+
+        // Create an instance to 100% coverage
+        constructor.setAccessible(true);
+        constructor.newInstance();
+    }
+
+    @Test
+    public void testFindInfoFile()
+    throws IOException
+    {
+        final File expected = testFile("x.info");
+        assertEquals(expected, InfoFileUtils.findInfoFile(testFile("x.y.z")));
+        assertEquals(expected, InfoFileUtils.findInfoFile(testFile("x.z")));
+        assertEquals(expected, InfoFileUtils.findInfoFile(testFile("x")));
+    }
+
+    @Test
     public void testGetFileInfoProperties()
     throws IOException
     {
-        Properties props = InfoFileUtils.getFileInfoProperties(extension,
-            new File("src/test/resources/testMPPS.dcm"));
+        Properties props = InfoFileUtils.getFileInfoProperties(extension, testFile("x.dcm"));
 
         assertNotNull(props);
         assertEquals("0.0.0.0", props.getProperty("hostname"));
+    }
+
+    @Test
+    public void testAddFileInfoProperties()
+    throws IOException
+    {
+        final File tempFile = File.createTempFile("x.y.z.", null);
+        InfoFileUtils.addFileInfoProperty(extension, tempFile, "prop1", "value1");
+        InfoFileUtils.addFileInfoProperty(extension, tempFile, "prop2", "value2");
+        Properties props = InfoFileUtils.getFileInfoProperties(extension, tempFile);
+
+        assertNotNull(props);
+        assertEquals("value1", props.getProperty("prop1"));
+        assertEquals("value2", props.getProperty("prop2"));
+
+        assertTrue(tempFile.delete());
+        assertTrue(InfoFileUtils.findInfoFile(tempFile).delete());
+    }
+
+    @Test
+    public void testSetFileInfoProperties()
+    throws IOException
+    {
+        final File tempFile = File.createTempFile("x.y.", null);
+        Properties props = new Properties();
+        props.put("prop", "value");
+        InfoFileUtils.setFileInfoProperties(extension, tempFile, props);
+
+        final File infoFile = InfoFileUtils.findInfoFile(tempFile);
+        props.clear();
+        try (InputStream inStream = Files.newInputStream(infoFile.toPath()))
+        {
+            props.load(inStream);
+        }
+        assertEquals(1, props.size());
+        assertEquals("value", props.getProperty("prop"));
+
+        assertTrue(tempFile.delete());
+        assertTrue(infoFile.delete());
     }
 
     @Test (expected = FileNotFoundException.class)
     public void testGetFileInfoPropertiesNotExistentFile()
     throws IOException
     {
-        InfoFileUtils.getFileInfoProperties(extension,
-            new File("src/test/resources/xr-dosesr-iod.xml"));
+        InfoFileUtils.getFileInfoProperties(extension, testFile("nonExistentFile.xml"));
+    }
+
+    @Test (expected = FileNotFoundException.class)
+    public void testGetFileInfoPropertiesNotFile()
+    throws IOException
+    {
+        InfoFileUtils.getFileInfoProperties(extension, testFile(""));
     }
 }

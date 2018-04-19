@@ -43,6 +43,7 @@ import java.io.FileFilter;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.util.Properties;
 
@@ -56,14 +57,116 @@ import org.slf4j.LoggerFactory;
  * @author Michael Backhaus &lt;michael.backhaus@agfa.com&gt;
  * @author Pavel Bludov
  */
-public class InfoFileUtils
+public final class InfoFileUtils
 {
     private static final Logger LOG = LoggerFactory.getLogger(InfoFileUtils.class);
+    private static final String SUFFIX = ".info";
 
+    /** Stop instances being created. **/
+    private InfoFileUtils()
+    {
+    }
+
+    /**
+     * Load the property set to the .info file associated with {@code file}.
+     * @param proxyAEE proxy AE extension instance
+     * @param file DCM file to load the property set
+     * @return loaded property set
+     * @throws IOException if error occurs
+     */
     public static Properties getFileInfoProperties(
         ProxyAEExtension proxyAEE,
         File file)
     throws IOException
+    {
+        final File infoFile = findInfoFile(file);
+        if (infoFile == null)
+        {
+            LOG.warn("findInfoFile: {} has no .info", file);
+            throw new FileNotFoundException(
+                "Unable to find information file for " + file);
+        }
+
+        final String aeTitle = proxyAEE.getApplicationEntity().getAETitle();
+        LOG.debug("{}: Loading info file {}", aeTitle, infoFile);
+        return loadPropertiesFromFile(infoFile);
+    }
+
+    /**
+     * Save the property set to the .info file associated with {@code file}.
+     * @param proxyAEE proxy AE extension instance
+     * @param file DCM file to add the property
+     * @param props properties to save
+     * @throws IOException if error occurs
+     */
+    public static void setFileInfoProperties(
+        ProxyAEExtension proxyAEE,
+        File file,
+        Properties props)
+    throws IOException
+    {
+        File infoFile = new File(file.getParent(), getBaseFileName(file) + SUFFIX);
+        final String aeTitle = proxyAEE.getApplicationEntity().getAETitle();
+        LOG.debug("{}: Saving info file {}", aeTitle, infoFile);
+        savePropertiesToFile(infoFile, props);
+    }
+
+    /**
+     * Add a property value to the .info file associated with {@code file}.
+     * @param proxyAEE proxy AE extension instance
+     * @param file DCM file to add the property
+     * @param key property name
+     * @param value property value
+     * @throws IOException if error occurs
+     */
+    public static void addFileInfoProperty(
+        ProxyAEExtension proxyAEE,
+        File file,
+        String key,
+        String value)
+    throws IOException
+    {
+        final String aeTitle = proxyAEE.getApplicationEntity().getAETitle();
+        final Properties props;
+        File infoFile = findInfoFile(file);
+        if (infoFile == null)
+        {
+            infoFile = new File(file.getParent(), getBaseFileName(file) + SUFFIX);
+            props = new Properties();
+        }
+        else
+        {
+            props = loadPropertiesFromFile(infoFile);
+        }
+        LOG.debug("{}: Add property {} to info file {}", key, aeTitle, infoFile);
+        props.setProperty(key, value);
+        savePropertiesToFile(infoFile, props);
+    }
+
+    /**
+     * Returns the file filter for .info files.
+     * @return file filter
+     */
+    public static FileFilter infoFileFilter()
+    {
+        return new FileFilter()
+        {
+            @Override
+            public boolean accept(
+                File pathname)
+            {
+                return pathname.getName().endsWith(SUFFIX);
+            }
+        };
+    }
+
+    /**
+     * Find the .info file associated with {@code file}.
+     * @param file DCM file to find the .info file
+     * @return .info file if exist, {@code null} otherwise
+     */
+    public static File findInfoFile(
+        File file)
     {
         final String baseFileName = getBaseFileName(file);
         File infoFile = null;
@@ -72,14 +175,12 @@ public class InfoFileUtils
             if (baseFileName.equals(getBaseFileName(f)))
             {
                 infoFile = f;
+                LOG.debug("findInfoFile: {} => {}", file, infoFile);
                 break;
             }
         }
-        if (infoFile == null)
-        {
-            throw new FileNotFoundException("Unable to find information file for " + file);
-        }
-        return loadPropertiesFromFile(proxyAEE, infoFile);
+
+        return infoFile;
     }
 
     private static String getBaseFileName(
@@ -90,13 +191,11 @@ public class InfoFileUtils
         return dotIndex > 0 ? name.substring(0, dotIndex) : name;
     }
 
-    public static Properties loadPropertiesFromFile(
-        ProxyAEExtension proxyAEE,
+    private static Properties loadPropertiesFromFile(
         File infoFile)
     throws IOException
     {
-        LOG.debug("{}: Loading info file {}", proxyAEE.getApplicationEntity().getAETitle(), infoFile);
-        Properties prop = new Properties();
+        final Properties prop = new Properties();
         try (InputStream inStream = Files.newInputStream(infoFile.toPath()))
         {
             prop.load(inStream);
@@ -104,16 +203,14 @@ public class InfoFileUtils
         return prop;
     }
 
-    public static FileFilter infoFileFilter()
+    private static void savePropertiesToFile(
+        File infoFile,
+        Properties prop)
+    throws IOException
     {
-        return new FileFilter()
+        try (OutputStream inStream = Files.newOutputStream(infoFile.toPath()))
         {
-            @Override
-            public boolean accept(
-                File pathname)
-            {
-                return pathname.getName().endsWith(".info");
-            }
-        };
+            prop.store(inStream, null);
+        }
     }
 }
