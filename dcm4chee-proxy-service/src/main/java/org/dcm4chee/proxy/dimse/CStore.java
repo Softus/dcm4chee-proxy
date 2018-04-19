@@ -76,7 +76,6 @@ import org.dcm4che3.net.pdu.AAssociateRQ;
 import org.dcm4che3.net.pdu.PresentationContext;
 import org.dcm4che3.net.service.BasicCStoreSCP;
 import org.dcm4che3.net.service.DicomServiceException;
-import org.dcm4che3.util.SafeClose;
 import org.dcm4chee.proxy.common.AuditDirectory;
 import org.dcm4chee.proxy.common.CMoveInfoObject;
 import org.dcm4chee.proxy.common.RetryObject;
@@ -292,56 +291,36 @@ public class CStore extends BasicCStoreSCP {
             Association as, PresentationContext pc, Attributes rq,
             PDVInputStream data, File file) throws IOException {
         LOG.debug("{}: write {}", as, file);
-        // stream to write spool file
-        FileOutputStream fout = new FileOutputStream(file);
-        BufferedOutputStream bout = new BufferedOutputStream(fout);
-        DicomOutputStream out = new DicomOutputStream(bout,
-                UID.ExplicitVRLittleEndian);
 
         String cuid = rq.getString(Tag.AffectedSOPClassUID);
         String iuid = rq.getString(Tag.AffectedSOPInstanceUID);
         String tsuid = pc.getTransferSyntax();
         Attributes fmi = as.createFileMetaInformation(iuid, cuid, tsuid);
-        // fix
-        // spool first
-        try {
+
+        try (DicomOutputStream out = new DicomOutputStream(new BufferedOutputStream(
+                new FileOutputStream(file)), UID.ExplicitVRLittleEndian)) {
             if (data != null) {
                 data.copyTo(out);
             }
-        } finally {
-            fout.flush();
-            fout.getFD().sync();
-            SafeClose.close(out);
-            SafeClose.close(bout);
-            SafeClose.close(fout);
         }
 
         // coerce second
-        DicomInputStream din = new DicomInputStream(file);
-        Attributes attrs = null;
-        try {
+        Attributes attrs;
+        try (DicomInputStream din = new DicomInputStream(file)) {
             // include only an uri in the read dataset
             din.setIncludeBulkData(IncludeBulkData.URI);
 
             attrs = din.readDataset(-1, -1);
-        } finally {
-            SafeClose.close(din);
         }
+
         File tempFile = new File(file.getPath() + ".tmpBulkData");
-        fout = new FileOutputStream(tempFile);
-        bout = new BufferedOutputStream(fout);
-        out = new DicomOutputStream(bout, UID.ExplicitVRLittleEndian);
-        attrs = AttributeCoercionUtils.coerceDataset(proxyAEE, as, Role.SCU,
+        try (DicomOutputStream out = new DicomOutputStream(new BufferedOutputStream(
+                new FileOutputStream(tempFile)), UID.ExplicitVRLittleEndian)) {
+            attrs = AttributeCoercionUtils.coerceDataset(proxyAEE, as, Role.SCU,
                 Dimse.C_STORE_RQ, attrs, rq);
-        try {
             out.writeDataset(fmi, attrs);
-            fout.flush();
-            fout.getFD().sync();
-        } finally {
-            SafeClose.close(out);
-            SafeClose.close(bout);
-            SafeClose.close(fout);
         }
+
         try {
             FileUtils.deleteQuietly(file);
             FileUtils.moveFile(tempFile, file);
