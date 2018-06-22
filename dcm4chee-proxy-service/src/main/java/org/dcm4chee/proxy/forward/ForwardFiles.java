@@ -1258,16 +1258,28 @@ public class ForwardFiles {
     }
 
     private void forwardScheduledCStoreFiles(ProxyAEExtension proxyAEE, String calledAET, File[] files) {
-        Collection<ForwardTask> forwardTasks = null;
-        forwardTasks = scanFiles(proxyAEE, calledAET, files);
-        for (ForwardTask ft : forwardTasks)
-            try {
-                processForwardTask(proxyAEE, ft);
-            } catch (IOException e) {
-                LOG.error("Error processing forwarding files: " + e.getMessage());
-                if(LOG.isDebugEnabled())
-                    e.printStackTrace();
+        Collection<ForwardTask> forwardTasks;
+        while (true)
+        {
+            forwardTasks = scanFiles(proxyAEE, calledAET, files);
+            if (forwardTasks.isEmpty())
+            {
+                break;
             }
+
+            for (ForwardTask ft : forwardTasks)
+                try
+                {
+                    processForwardTask(proxyAEE, ft);
+                }
+                catch (IOException e)
+                {
+                    LOG.error(
+                    "Error processing forwarding files: " + e.getMessage());
+                    if (LOG.isDebugEnabled())
+                        e.printStackTrace();
+                }
+        }
     }
 
     private void processForwardTask(ProxyAEExtension proxyAEE, ForwardTask ft) throws IOException {
@@ -1447,6 +1459,9 @@ public class ForwardFiles {
             String calledAET, File[] files) {
         HashMap<String, ForwardTask> map = new HashMap<String, ForwardTask>(4);
         for (File file : files) {
+            if (map.size() >= 64) {
+                break;
+            }
             try {
                 if (lock.tryLock(100, TimeUnit.MILLISECONDS)) {
                     try {
@@ -1491,8 +1506,12 @@ public class ForwardFiles {
                         lock.unlock();
                     }
                 }
+                else {
+                    LOG.debug("Failed to aquire the lock. The file {} skipped",
+                        file.getPath());
+                }
             } catch (InterruptedException e) {
-                LOG.error("Error acquiring lock for file scan and rename {}", e);
+                LOG.error("Error acquiring lock for file scan and rename", e);
             }
         }
         return map.values();
